@@ -1,0 +1,165 @@
+{
+  "generatedAt": "2026-11-12T16:05:59.730096+00:00",
+  "grandTotal": 7668,
+  "bySource": {
+    "cisce": {
+      "icse-9": {
+        "subjects": {
+          "Biology": 2,
+          "Chemistry": 2,
+          "Commercial Applications": 1,
+          "Commercial Studies": 2,
+          "Computer Applications": 3,
+          "Economic Applications": 1,
+          "Economics": 2,
+          "English Language": 2,
+          "Literature in English": 2,
+          "Geography": 2,
+          "Hindi": 1,
+          "History & Civics": 2,
+          "Mathematics": 2,
+          "Physics": 2
+        },
+        "misc": 1,
+        "total": 27
+      },
+      "icse-10": {
+        "subjects": {
+          "Biology": 28,
+          "Chemistry": 29,
+          "Commercial Applications": 20,
+          "Commercial Studies": 19,
+          "Computer Applications": 27,
+          "Economic Applications": 16,
+          "Economics": 21,
+          "English Language": 32,
+          "Literature in English": 22,
+          "Geography": 30,
+          "Hindi": 22,
+          "History & Civics": 23,
+          "Mathematics": 30,
+          "Physics": 29
+        },
+        "misc": 2,
+        "total": 350
+      },
+      "isc-11": {
+        "subjects": {
+          "Accountancy": 3,
+          "Biology": 2,
+          "Business Studies": 3,
+          "Chemistry": 2,
+          "Commerce": 1,
+          "Computer Science": 5,
+          "Economics": 2,
+          "English Language": 2,
+          "Geography": 2,
+          "History": 2,
+          "Literature in English": 3,
+          "Mathematics": 4,
+          "Physics": 2,
+          "Political Science": 2,
+          "Psychology": 2,
+          "Sociology": 2
+        },
+        "misc": 3,
+        "total": 42
+      },
+      "isc-12": {
+        "subjects": {
+          "Accountancy": 23,
+          "Biology": 22,
+          "Business Studies": 20,
+          "Chemistry": 22,
+          "Commerce": 23,
+          "Computer Science": 21,
+          "Economics": 21,
+          "English Language": 23,
+          "Environmental Science": 1,
+          "Geography": 22,
+          "Hindi": 17,
+          "History": 22,
+          "Home Science": 3,
+          "Literature in English": 18,
+          "Mathematics": 24,
+          "Physics": 23,
+          "Political Science": 21,
+          "Psychology": 21,
+          "Sociology": 21
+        },
+        "misc": 3,
+        "total": 371
+      }
+    },
+    "community": {
+      "icse-9": {
+        "subjects": {
+          "Biology": 1,
+          "Chemistry": 1,
+          "Computer Applications": 1,
+          "Economic Applications": 1,
+          "Literature in English": 2,
+          "Geography": 1,
+          "History & Civics": 1,
+          "Mathematics": 1,
+          "Physics": 1
+        },
+        "misc": 0,
+        "total": 10
+      },
+      "icse-10": {
+        "subjects": {
+          "Featured": 6,
+          "Biology": 585,
+          "Chemistry": 593,
+          "Commercial Applications": 29,
+          "Commercial Studies": 44,
+          "Computer Applications": 194,
+          "Economic Applications": 5,
+          "Economics": 91,
+          "English Language": 647,
+          "Geography": 525,
+          "Hindi": 324,
+          "History & Civics": 509,
+          "Literature in English": 628,
+          "Mathematics": 839,
+          "Physics": 580
+        },
+        "misc": 432,
+        "total": 6031
+      },
+      "isc-11": {
+        "subjects": {
+          "Chemistry": 7,
+          "English Language": 4,
+          "Literature in English": 12,
+          "Mathematics": 5,
+          "Physics": 15
+        },
+        "misc": 0,
+        "total": 43
+      },
+      "isc-12": {
+        "subjects": {
+          "Accountancy": 38,
+          "Biology": 48,
+          "Business Studies": 6,
+          "Chemistry": 65,
+          "Commerce": 45,
+          "Computer Science": 56,
+          "Economics": 168,
+          "English Language": 7,
+          "Geography": 16,
+          "History": 6,
+          "Literature in English": 53,
+          "Mathematics": 116,
+          "Physics": 100,
+          "Psychology": 37,
+          "Sociology": 33
+        },
+        "misc": 0,
+        "total": 794
+      }
+    }
+  }
+}

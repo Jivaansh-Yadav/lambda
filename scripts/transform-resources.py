@@ -1,0 +1,580 @@
+#!/usr/bin/env python3
+"""Transform the unified Lambda Prep Google-Drive crawl (scripts/drive-crawl/
+output/<class>/{cisce,community}.json) into the per-class subject-bucketed
+resource JSON consumed by the Lambda Prep resources UI.
+
+Produces, for every class with crawl output present (icse-9, icse-10,
+isc-11, isc-12):
+  src/data/resources-cisce-<class>.json
+  src/data/resources-community-<class>.json
+Each has shape: { subjects: [{ subject, items: [{name, id, group, ...}],
+                                editorFolders?: [...] }], misc: [...] }
+
+Only content with a clear subject header (folder/filename matching one of
+the class's own canonical subjects) is bucketed under that subject.
+Everything else goes to `misc`.
+
+Usage:
+  python3 scripts/transform-resources.py
+"""
+import json, os, re
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CRAWL_DIR = os.path.join(ROOT, 'scripts', 'drive-crawl', 'output')
+DATA_DIR = os.path.join(ROOT, 'src', 'data')
+
+CLASS_SLUGS = ['icse-9', 'icse-10', 'isc-11', 'isc-12']
+BOARD_ROMAN_BY_SLUG = {
+    'icse-9': ('ICSE', 'IX'), 'icse-10': ('ICSE', 'X'),
+    'isc-11': ('ISC', 'XI'), 'isc-12': ('ISC', 'XII'),
+}
+
+# ---------------------------------------------------------------------------
+# Canonical subject names per board, matching src/lib/lambda-prep.ts / doxxmarks_resources.json.
+# ---------------------------------------------------------------------------
+ICSE_SUBJECTS = [
+    'Biology', 'Chemistry', 'Commercial Applications', 'Commercial Studies',
+    'Computer Applications', 'Economic Applications', 'Economics',
+    'English Language', 'Literature in English', 'Geography', 'Hindi',
+    'History & Civics', 'Mathematics', 'Physics',
+]
+ISC_SUBJECTS = [
+    'Accountancy', 'Biology', 'Business Studies', 'Chemistry', 'Commerce',
+    'Computer Science', 'Economics', 'English Language', 'Environmental Science',
+    'Geography', 'Hindi', 'History', 'Home Science', 'Literature in English',
+    'Mathematics', 'Physics', 'Political Science', 'Psychology', 'Sociology',
+]
+SUBJECTS_BY_BOARD = {'ICSE': ICSE_SUBJECTS, 'ISC': ISC_SUBJECTS}
+
+# Subject-name token matcher: longer/more-specific patterns first. Shared
+# across CISCE + Community + Doxxmarks + the Miscellaneous-prelims walk, so
+# naming is consistent everywhere.
+SUBJECT_TOKENS = [
+    (re.compile(r'accountancy', re.I), 'Accountancy'),
+    (re.compile(r'\baccounts\b', re.I), 'Accountancy'),
+    (re.compile(r'business[\s_-]*studies', re.I), 'Business Studies'),
+    (re.compile(r'biology|\bbio\b', re.I), 'Biology'),
+    (re.compile(r'chemistry|\bchem\b', re.I), 'Chemistry'),
+    (re.compile(r'\bcommerce\b', re.I), 'Commerce'),
+    (re.compile(r'commercial[\s_-]*application|\bcomm(?:ercial)?[\s_.-]*app(?:s|lication)?\b', re.I), 'Commercial Applications'),
+    (re.compile(r'commercial[\s_-]*stud|\bcomm(?:ercial)?[\s_.-]*stud(?:y|ies)?\b', re.I), 'Commercial Studies'),
+    (re.compile(r'computer[\s_-]*application|\bcomp[\s_-]*app\b', re.I), 'Computer Applications'),
+    (re.compile(r'computer[\s_-]*science', re.I), 'Computer Science'),
+    (re.compile(r'\bcomputers?\b', re.I), 'COMPUTER_GENERIC'),
+    (re.compile(r'economic[\s_-]*application', re.I), 'Economic Applications'),
+    (re.compile(r'economics|\beco\b', re.I), 'Economics'),
+    (re.compile(r'english[\s_-]*lang|\beng[\s_.-]*1\b|\beng(?:lish)?[\s_.-]*lang(?:uage)?\b|\belang\b|\blanguage\b', re.I), 'English Language'),
+    (re.compile(r'literature[\s_-]*in[\s_-]*english|english[\s_-]*lit|\beng(?:lish)?[\s_.-]*lit(?:erature)?\b|\belit\b|\bliterature\b', re.I), 'Literature in English'),
+    (re.compile(r'environmental[\s_-]*science|\bevs\b', re.I), 'Environmental Science'),
+    (re.compile(r'geography|\bgeog?\b', re.I), 'Geography'),
+    (re.compile(r'hindi', re.I), 'Hindi'),
+    (re.compile(r'history[,\s_-]*(and|&)?[,\s_-]*civics[,\s_-]*(and|&)?[,\s_-]*geography', re.I), 'HCG_COMBINED'),
+    (re.compile(r'history[\s_-]*(and|&)?[\s_-]*civics|civics[\s_-]*(and|&)?[\s_-]*history|hist[\s_-]*civics|\bhcg\b', re.I), 'History & Civics'),
+    (re.compile(r'\bhistory\b|\bhist\b', re.I), 'HISTORY_GENERIC'),
+    (re.compile(r'home[\s_-]*science', re.I), 'Home Science'),
+    (re.compile(r'mathematics|\bmaths?\b', re.I), 'Mathematics'),
+    (re.compile(r'physics|\bphy\b', re.I), 'Physics'),
+    (re.compile(r'political[\s_-]*science|\bpol[\s_-]*sci\b', re.I), 'Political Science'),
+    (re.compile(r'psychology', re.I), 'Psychology'),
+    (re.compile(r'sociology', re.I), 'Sociology'),
+    (re.compile(r'\bscience\b', re.I), 'SCIENCE_COMBINED'),
+    (re.compile(r'\benglish\b', re.I), 'English Language'),
+]
+
+# Physical Education / third languages / other non-tracked subjects that
+# should be explicitly excluded (never fall back to a loose filename match
+# underneath them) rather than silently miscategorized.
+EXCLUDE_TOKENS = re.compile(
+    r'physical[\s_-]*education|\bPE\b|\bFrench\b|\bGerman\b|\bGujarati\b|\bMarathi\b|\bBengali\b|\bSanskrit\b',
+    re.I,
+)
+
+
+def classify_subject(name: str, canonical: set):
+    """Match `name` against SUBJECT_TOKENS, expanding the combined-science /
+    combined-HCG sentinels into their real subject lists, and only
+    returning subjects that are in `canonical` (the class's own subject
+    set) — e.g. ISC has no 'History & Civics', ICSE has no 'History'."""
+    if EXCLUDE_TOKENS.search(name):
+        return None
+    for pat, subj in SUBJECT_TOKENS:
+        if pat.search(name):
+            if subj == 'HCG_COMBINED':
+                return [s for s in ('History & Civics', 'Geography') if s in canonical] or None
+            if subj == 'SCIENCE_COMBINED':
+                return [s for s in ('Physics', 'Chemistry', 'Biology') if s in canonical] or None
+            if subj == 'HISTORY_GENERIC':
+                return [s for s in ('History & Civics', 'History') if s in canonical] or None
+            if subj == 'COMPUTER_GENERIC':
+                return [s for s in ('Computer Applications', 'Computer Science') if s in canonical] or None
+            return [subj] if subj in canonical else None
+    return None
+
+
+def clean_filename(name: str, mime_type: str | None) -> str:
+    """Normalize a Drive filename: fix the stray-mid-string-extension bug
+    seen in some uploads (e.g. "Biology.pdf - SQP - 2019" or "English
+    Languagepdf") so every file consistently ends with its real extension,
+    and collapse any accidental double spaces. Leaves filenames that
+    already end with a recognizable extension untouched (aside from
+    whitespace collapsing)."""
+    ext_map = {'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png'}
+    ext = ext_map.get(mime_type or '')
+    if not ext:
+        return re.sub(r'\s+', ' ', name).strip()
+    if re.search(r'\.[a-z0-9]{2,5}$', name, re.I):
+        return re.sub(r'\s+', ' ', name).strip()
+    mid_ext = re.compile(r'\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|webp|svg)(?=[\s\-]|$)', re.I)
+    glued_ext = re.compile(r'(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|webp|svg)$', re.I)
+    stripped = mid_ext.sub('', name)
+    stripped = glued_ext.sub('', stripped)
+    stripped = re.sub(r'(?<=[A-Za-z0-9])-(?=\s)', ' -', stripped)
+    stripped = re.sub(r'\s+', ' ', stripped).strip().rstrip(' -')
+    return f'{stripped}.{ext}'
+
+
+def load(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def meta_of(node):
+    return {
+        'mimeType': node.get('mimeType'),
+        'createdTime': node.get('createdTime'),
+        'modifiedTime': node.get('modifiedTime'),
+        'size': node.get('size'),
+    }
+
+
+def make_item(node, group):
+    return {'name': clean_filename(node['name'], node.get('mimeType')), 'id': node['id'], 'group': group, **meta_of(node)}
+
+
+def walk_files(node, prefix=()):
+    """Yield (raw_node, path_tuple) for every file leaf under `node`."""
+    if node.get('type') == 'file':
+        yield node, prefix
+        return
+    for c in node.get('children', []):
+        if c.get('type') == 'file':
+            yield c, prefix
+        else:
+            yield from walk_files(c, prefix + (c['name'],))
+
+
+def build_folder_node(node, group_label):
+    """Convert a raw Drive folder-tree node into the {type:'folder', name,
+    children} shape consumed by the Lambda Prep UI's recursive folder
+    navigator (used for Editor's Choice cards like Julius Caesar / Macbeth)."""
+    children = []
+    for c in node.get('children', []):
+        if c.get('type') == 'folder':
+            children.append(build_folder_node(c, group_label))
+        elif c.get('id'):
+            children.append(make_item(c, group_label))
+    return {'type': 'folder', 'name': node['name'], 'children': children}
+
+
+# ---------------------------------------------------------------------------
+# CISCE Resources: type-folder (APF/CFQ/PYQP/SQP/Syllabus) -> year -> files,
+# with the subject identified from the filename itself. Files are bucketed
+# into every matching subject (combined Science / HCG papers fan out to
+# all their component subjects, matching the legacy dataset's behavior).
+# ---------------------------------------------------------------------------
+TYPE_FOLDER_LABELS = [
+    (re.compile(r'analysis of pupil performance', re.I), 'Analysis of Pupil Performance'),
+    (re.compile(r'competency focused questions', re.I), 'CFQs'),
+    (re.compile(r'previous year question papers', re.I), 'PYQs'),
+    (re.compile(r'specimen question papers', re.I), 'Specimen QPs'),
+    (re.compile(r'syllabus', re.I), 'Syllabus'),
+]
+
+
+def type_label_for(folder_name: str) -> str:
+    for pat, label in TYPE_FOLDER_LABELS:
+        if pat.search(folder_name):
+            return label
+    return folder_name
+
+
+def insert_into_tree(tree: dict, path: tuple, item: dict):
+    """Insert a file `item` into a nested dict tree keyed by `path` segments
+    (e.g. ('PYQs', '2018')), creating intermediate folder levels as needed.
+    Leaf files at a level are collected under the '__files__' key."""
+    node = tree
+    for segment in path:
+        node = node.setdefault(segment, {})
+    node.setdefault('__files__', []).append(item)
+
+
+def tree_to_folder_nodes(tree: dict) -> list:
+    """Convert a nested dict tree (as built by insert_into_tree) into the
+    {type:'folder', name, children} shape the UI's folder navigator
+    consumes. Subfolders come first (in insertion order), then this
+    level's own loose files."""
+    nodes = []
+    for key, sub in tree.items():
+        if key == '__files__':
+            continue
+        children = tree_to_folder_nodes(sub) + sub.get('__files__', [])
+        nodes.append({'type': 'folder', 'name': key, 'children': children})
+    return nodes
+
+
+def build_cisce(class_slug: str, canonical: set):
+    """Build each subject's official CISCE resources as a navigable folder
+    tree (type folder, e.g. "PYQs" -> year folder -> files) instead of
+    flat year-exploded groups, so the UI can offer the same folder-card
+    drill-down navigation used for Community's curated folders (e.g.
+    Literature in English's Julius Caesar) rather than listing every
+    type/year combination as its own section."""
+    path = os.path.join(CRAWL_DIR, class_slug, 'cisce.json')
+    if not os.path.isfile(path):
+        return None
+    data = load(path)
+    trees: dict[str, dict] = {s: {} for s in canonical}
+    misc = []
+    for node, file_path in walk_files(data):
+        if not node.get('id'):
+            continue
+        if not file_path:
+            # Loose top-level file (e.g. "Regulations - 2027.pdf") -- a
+            # board-wide circular, not subject-specific paper content.
+            misc.append(make_item(node, 'Other'))
+            continue
+        subs = classify_subject(node['name'], canonical)
+        top_label = type_label_for(file_path[0])
+        rel_path = (top_label,) + file_path[1:]
+        if subs:
+            for s in subs:
+                insert_into_tree(trees[s], rel_path, make_item(node, rel_path[-1]))
+        else:
+            misc.append(make_item(node, top_label))
+    subjects_out = []
+    for s in canonical:
+        folders = tree_to_folder_nodes(trees[s])
+        if folders:
+            subjects_out.append({
+                'subject': s,
+                'items': [],
+                'editorFolders': folders,
+                'editorFoldersGroup': 'CISCE Resources',
+            })
+    return {'subjects': subjects_out, 'misc': misc}
+
+
+# ---------------------------------------------------------------------------
+# Community Resources: top-level folders are already subject-named (one
+# folder per subject, matching the class's own canonical set, plus
+# "Featured" for loose top-level files and a "Miscellaneous" folder that
+# itself nests many unrelated PYQ/prelim-paper collections with their own
+# inconsistent internal structure (subject subfolders at varying depths,
+# or school-named folders with subject-named files directly inside)).
+# ---------------------------------------------------------------------------
+
+# Folders promoted to recursive "Editor's Choice" folder-cards so the UI
+# renders them as folder-navigable cards instead of flat files (matching
+# the legacy dataset's Julius Caesar / Treasure Chest / Macbeth / Prism /
+# Rhapsody treatment). Keyed by subject name.
+EDITOR_FOLDER_NAMES_BY_SUBJECT = {
+    'Literature in English': {'Julius Caesar', 'Treasure Chest', 'Macbeth', 'Prism', 'Rhapsody'},
+}
+
+
+def walk_misc_tree(node, active_subject, top_label, misc_out, buckets):
+    """Depth-first walk of one "Miscellaneous" child collection (e.g. "STD.
+    X", "2025 Prelim Papers"), assigning files to the nearest resolved
+    subject-named ancestor folder. If no ancestor folder resolved to a
+    subject yet, falls back to matching the file's own name (covers
+    school-named folders with subject-named files directly inside, e.g.
+    "AVM 2025/AVM Biology Prelim 2025.pdf"). Files under a folder that
+    explicitly excluded (e.g. Physical Education) never fall back to
+    filename matching."""
+    for c in node.get('children', []):
+        if c.get('type') == 'file':
+            if not c.get('id'):
+                continue
+            subs = active_subject if active_subject not in (None, 'EXCLUDED') else None
+            if subs is None and active_subject is None:
+                subs = classify_subject(c['name'], set(buckets.keys()))
+            if subs:
+                for s in subs:
+                    if s in buckets:
+                        buckets[s].append(make_item(c, f'PYQ Prelims \u00b7 {top_label}'))
+            else:
+                misc_out.append(make_item(c, f'PYQ Prelims \u00b7 {top_label}'))
+        else:
+            resolved = classify_subject(c['name'], set(buckets.keys()))
+            if EXCLUDE_TOKENS.search(c['name']):
+                next_subject = 'EXCLUDED'
+            elif resolved:
+                next_subject = resolved
+            else:
+                next_subject = active_subject
+            walk_misc_tree(c, next_subject, top_label, misc_out, buckets)
+
+
+def build_community(class_slug: str, canonical: set):
+    path = os.path.join(CRAWL_DIR, class_slug, 'community.json')
+    if not os.path.isfile(path):
+        return None
+    data = load(path)
+    buckets: dict[str, list] = {s: [] for s in canonical}
+    extra_buckets: dict[str, list] = {}
+    misc = []
+    editor_folders_by_subject: dict[str, list] = {}
+
+    for top in data.get('children', []):
+        name = top.get('name', '').strip()
+        if top.get('type') == 'file':
+            if top.get('id'):
+                extra_buckets.setdefault('Featured', []).append(make_item(top, 'Featured'))
+            continue
+
+        if name == 'Miscellaneous':
+            # Each child here is its own independent collection (a prelims
+            # pack, a school-year archive, ...) with its own internal
+            # structure — walk each one separately so top_label tracks the
+            # collection it actually came from.
+            for collection in top.get('children', []):
+                if collection.get('type') == 'file':
+                    if collection.get('id'):
+                        misc.append(make_item(collection, 'Miscellaneous'))
+                    continue
+                walk_misc_tree(collection, None, collection['name'].strip(), misc, {**buckets, **extra_buckets})
+            continue
+
+        subs_for_top = classify_subject(name, canonical)
+        subject = subs_for_top[0] if subs_for_top and len(subs_for_top) == 1 else None
+        if subject is None or subject not in canonical:
+            # Non-canonical top-level folder -> its own subject bucket,
+            # named after the folder itself, grouped by immediate parent.
+            bucket = extra_buckets.setdefault(name, [])
+            for node, file_path in walk_files(top):
+                if not node.get('id'):
+                    continue
+                group = file_path[-1] if file_path else 'General'
+                bucket.append(make_item(node, group))
+            continue
+
+        editor_names = EDITOR_FOLDER_NAMES_BY_SUBJECT.get(subject, set())
+        top_for_walk = top
+        if editor_names:
+            editor_folders_by_subject.setdefault(subject, [])
+            kept_children = []
+            for c in top.get('children', []):
+                if c.get('type') == 'folder' and c.get('name') in editor_names:
+                    editor_folders_by_subject[subject].append(build_folder_node(c, 'General'))
+                else:
+                    kept_children.append(c)
+            top_for_walk = dict(top, children=kept_children)
+
+        for node, file_path in walk_files(top_for_walk):
+            if not node.get('id'):
+                continue
+            group = file_path[-1] if file_path else 'General'
+            buckets[subject].append(make_item(node, group))
+
+    subjects_out = [{'subject': s, 'items': items} for s, items in buckets.items() if items]
+    subjects_out.extend({'subject': s, 'items': items} for s, items in extra_buckets.items() if items)
+    for s in subjects_out:
+        folders = editor_folders_by_subject.get(s['subject'])
+        if folders:
+            s['editorFolders'] = folders
+
+    return {'subjects': subjects_out, 'misc': misc}
+
+
+def count_files(payload) -> int:
+    """Total file items in a dataset payload (subject buckets, folder trees
+    and the misc list all count)."""
+
+    def walk(node):
+        if isinstance(node, dict):
+            if 'id' in node and 'children' not in node:
+                return 1
+            return sum(walk(v) for v in node.values())
+        if isinstance(node, list):
+            return sum(walk(v) for v in node)
+        return 0
+
+    return walk(payload)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic ordering. Drive returns a folder's children in whatever order
+# it feels like (and drops new uploads wherever it likes), so a re-crawl of
+# unchanged content reshuffles file lists -- diff noise in the repo and a file
+# order on the site that can move on the weekly refresh. Sorting by name inside
+# each group gives every re-run the same output for the same content.
+# ---------------------------------------------------------------------------
+
+NATURAL_CHUNK = re.compile(r'\d+|\D+')
+LEADING_YEAR = re.compile(r'^(\d{4})\b')
+
+# Card order for the CISCE type folders in the folder navigator: papers first,
+# board commentary last. Independent of TYPE_FOLDER_LABELS' regex order, which
+# exists only to resolve names to labels.
+TYPE_FOLDER_DISPLAY_ORDER = [
+    'PYQs', 'Specimen QPs', 'CFQs', 'Analysis of Pupil Performance', 'Syllabus',
+]
+
+
+def natural_key(text: str):
+    """Case-insensitive natural sort key: 'Paper 2' before 'Paper 10', and
+    '2019' before '2023' instead of the other way round."""
+    key = []
+    for chunk in NATURAL_CHUNK.findall((text or '').strip().casefold()):
+        key.append((0, int(chunk), '') if chunk.isdigit() else (1, 0, chunk))
+    return tuple(key)
+
+
+def item_sort_key(item: dict):
+    # Legacy-imported items carry originalName instead of name.
+    name = item.get('name') or item.get('originalName') or ''
+    return (natural_key(name), item.get('id') or '')
+
+
+def folder_name_key(name: str):
+    """Year folders read newest-first: PYQs opens on 2026, not 2017. Anything
+    that does not start with a four-digit year keeps name order and sorts
+    after the years, so a stray 'Undated' folder cannot land mid-decade."""
+    match = LEADING_YEAR.match(name.strip())
+    if match:
+        return (0, -int(match.group(1)), natural_key(name))
+    return (1, 0, natural_key(name))
+
+
+def folder_rank(name: str) -> int:
+    """Keep the CISCE type folders in reading order (PYQs, Specimen QPs, CFQs,
+    Analysis of Pupil Performance, Syllabus) rather than letting an
+    alphabetical sort put 'Analysis' first. Anything else (year folders,
+    Editor's Choice collections) is ordered purely by name."""
+    label = type_label_for(name)
+    if label in TYPE_FOLDER_DISPLAY_ORDER:
+        return TYPE_FOLDER_DISPLAY_ORDER.index(label)
+    return len(TYPE_FOLDER_DISPLAY_ORDER)
+
+
+def child_sort_key(node: dict):
+    """Folders before loose files -- the same order tree_to_folder_nodes()
+    already emits -- then type-folder reading order, then year (newest first)
+    or name."""
+    name = node.get('name', '')
+    if node.get('type') == 'folder':
+        return (0, folder_rank(name), folder_name_key(name), '')
+    return (1, len(TYPE_FOLDER_DISPLAY_ORDER), natural_key(name), node.get('id') or '')
+
+
+def sort_items(items: list) -> list:
+    """Sort file items by name inside each group. Group sections themselves
+    keep first-appearance order (the UI renders sections in that order, with
+    its own priority override for General / Sample Papers / Solutions View)."""
+    buckets: dict[str, list] = {}
+    order: list[str] = []
+    for item in items:
+        group = item.get('group', '')
+        if group not in buckets:
+            buckets[group] = []
+            order.append(group)
+        buckets[group].append(item)
+    out = []
+    for group in order:
+        out.extend(sorted(buckets[group], key=item_sort_key))
+    return out
+
+
+def sort_folder(node: dict) -> None:
+    for child in node.get('children') or []:
+        if child.get('type') == 'folder':
+            sort_folder(child)
+    node['children'] = sorted(node.get('children') or [], key=child_sort_key)
+
+
+def sort_payload(payload: dict) -> dict:
+    for subject in payload.get('subjects', []):
+        if subject.get('items'):
+            subject['items'] = sort_items(subject['items'])
+        folders = subject.get('editorFolders')
+        if folders:
+            for folder in folders:
+                sort_folder(folder)
+            # The top-level folder cards are themselves a list of folders, so
+            # they need the same ordering as a folder's children.
+            subject['editorFolders'] = sorted(folders, key=child_sort_key)
+    if payload.get('misc'):
+        payload['misc'] = sort_items(payload['misc'])
+    return payload
+
+
+def write_dataset(out_path: str, payload, label: str) -> None:
+    """Write one generated dataset, refusing to replace a populated file with
+    an empty one.
+
+    An empty build almost always means the Drive source folder was emptied,
+    moved, or the service account lost sight of it -- not that every resource
+    was intentionally deleted. Committing the empty result silently wipes the
+    live library (this is how ISC XII's Community dataset got zeroed), so keep
+    the last good file and make the failure loud instead.
+    """
+    sort_payload(payload)
+    new_count = count_files(payload)
+    old_count = 0
+    if os.path.isfile(out_path):
+        try:
+            with open(out_path) as f:
+                old_count = count_files(json.load(f))
+        except (ValueError, OSError):
+            old_count = 0
+
+    if new_count == 0 and old_count > 0:
+        print(
+            f'REFUSED {label}: crawl produced 0 files but the committed dataset has '
+            f'{old_count} -- keeping the existing file. Check the Drive source folder.',
+            flush=True,
+        )
+        return
+
+    with open(out_path, 'w') as f:
+        json.dump(payload, f, ensure_ascii=False)
+
+    if old_count and new_count * 2 < old_count:
+        print(
+            f'WARNING {label}: file count dropped from {old_count} to {new_count} '
+            f'(more than half). Verify the Drive source folder before committing.',
+            flush=True,
+        )
+    print(f'wrote {label}: {new_count} files', flush=True)
+
+
+def main():
+    for class_slug in CLASS_SLUGS:
+        board, _roman = BOARD_ROMAN_BY_SLUG[class_slug]
+        # Ordered list, not a set: bucket order follows the canonical subject
+        # list so regenerating an unchanged dataset produces an identical file
+        # instead of shuffling subjects on every run.
+        canonical_order = SUBJECTS_BY_BOARD[board]
+        canonical = set(canonical_order)
+
+        cisce = build_cisce(class_slug, canonical_order)
+        if cisce is not None:
+            out_path = os.path.join(DATA_DIR, f'resources-cisce-{class_slug}.json')
+            write_dataset(out_path, cisce, f'{class_slug} CISCE')
+            print(f'{class_slug} CISCE subjects:', [(s['subject'], len(s['items'])) for s in cisce['subjects']])
+            print(f'{class_slug} CISCE misc:', len(cisce['misc']))
+        else:
+            print(f'skip {class_slug} CISCE: no crawl output found')
+
+        community = build_community(class_slug, canonical_order)
+        if community is not None:
+            out_path = os.path.join(DATA_DIR, f'resources-community-{class_slug}.json')
+            write_dataset(out_path, community, f'{class_slug} Community')
+            print(f'{class_slug} Community subjects:', [(s['subject'], len(s['items'])) for s in community['subjects']])
+            print(f'{class_slug} Community misc:', len(community['misc']))
+        else:
+            print(f'skip {class_slug} Community: no crawl output found')
+
+
+if __name__ == '__main__':
+    main()

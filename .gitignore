@@ -1,0 +1,42 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+.output
+.vinxi
+.tanstack/**
+.nitro
+*.local
+
+# Wrangler / Cloudflare
+.wrangler/
+.dev.vars
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Drive crawl: credentials and intermediate crawl output are regenerated on
+# every CI run and must never be committed (credentials are secret; crawl
+# output is a build artifact, not the final transformed datasets).
+scripts/drive-crawl/service-account.json
+scripts/drive-crawl/output/
+scripts/drive-crawl/node_modules/
+
+# Neon CLI local config (project/branch IDs, not secret but local-only)
+.neon

@@ -1,0 +1,128 @@
+import { Leaf, FlaskConical, Calculator, Monitor, PenLine, Globe2, Languages, Landmark, Ruler, Lightbulb, BookOpen, ChartNoAxesCombined, BriefcaseBusiness, Brain, HeartPulse, Users } from 'lucide-react';
+
+export const classes = [
+  { slug: 'icse-9', grade: '9', roman: 'IX', board: 'ICSE', label: 'ICSE Foundation', description: 'Build strong foundations. Get a head start.', icon: BookOpen, tone: 'blue' },
+  { slug: 'icse-10', grade: '10', roman: 'X', board: 'ICSE', label: 'ICSE Board Prep', description: 'Prepare with purpose. Approach boards ready.', icon: BookOpen, tone: 'green' },
+  { slug: 'isc-11', grade: '11', roman: 'XI', board: 'ISC', label: 'ISC Core Streams', description: 'Find your stream. Deepen your understanding.', icon: BookOpen, tone: 'purple' },
+  { slug: 'isc-12', grade: '12', roman: 'XII', board: 'ISC', label: 'ISC Board Finals', description: 'Make every revision count. Finish strong.', icon: BookOpen, tone: 'amber' },
+] as const;
+/** Unique, keyword-specific meta descriptions for each class hub page —
+ * kept distinct per class (rather than one shared string) so search
+ * engines don't treat the four /classes/* pages as duplicate content. */
+export const classSeoDescriptions: Record<string, string> = {
+  'icse-9': 'ICSE Class 9 study resources: subject-wise notes, revision material and practice papers for Biology, Chemistry, Maths, Computer Applications and more.',
+  'icse-10': 'ICSE Class 10 board exam preparation: notes, specimen papers, past papers and subject-wise resources for Maths, Science, English, History & Civics and more.',
+  'isc-11': 'ISC Class 11 resources for Science, Commerce and Humanities streams: notes, practice papers and subject guides for Physics, Accountancy, Economics and more.',
+  'isc-12': 'ISC Class 12 board finals prep: curated notes, past papers and revision material across Science, Commerce and Humanities streams.',
+};
+
+export const subjects = [
+  { name: 'Biology', icon: Leaf, tone: 'green', streams: ['Science'] },
+  { name: 'Chemistry', icon: FlaskConical, tone: 'purple', streams: ['Science'] },
+  { name: 'Commercial Applications', icon: Calculator, tone: 'green', streams: ['Commerce'], icseOnly: true },
+  { name: 'Commercial Studies', icon: BriefcaseBusiness, tone: 'teal', streams: ['Commerce'], icseOnly: true },
+  { name: 'Economic Applications', icon: ChartNoAxesCombined, tone: 'rose', streams: ['Commerce'], icseOnly: true },
+  { name: 'Computer Applications', icon: Monitor, tone: 'blue', streams: ['Science'], icseOnly: true },
+  { name: 'English Language', icon: PenLine, tone: 'purple', streams: ['Science', 'Commerce', 'Humanities'] },
+  { name: 'Literature in English', icon: BookOpen, tone: 'rose', streams: ['Science', 'Commerce', 'Humanities'] },
+  { name: 'Geography', icon: Globe2, tone: 'teal', streams: ['Humanities'] },
+  { name: 'Hindi', icon: Languages, tone: 'rose', streams: ['Science', 'Commerce', 'Humanities'] },
+  { name: 'History & Civics', icon: Landmark, tone: 'amber', streams: ['Humanities'], icseOnly: true },
+  { name: 'Mathematics', icon: Ruler, tone: 'blue', streams: ['Science', 'Commerce'] },
+  { name: 'Physics', icon: Lightbulb, tone: 'amber', streams: ['Science'] },
+  { name: 'Computer Science', icon: Monitor, tone: 'blue', streams: ['Science'], iscOnly: true },
+  { name: 'Accountancy', icon: Calculator, tone: 'green', streams: ['Commerce'], iscOnly: true },
+  { name: 'Business Studies', icon: BriefcaseBusiness, tone: 'green', streams: ['Commerce'], iscOnly: true },
+  { name: 'Commerce', icon: BriefcaseBusiness, tone: 'teal', streams: ['Commerce'], iscOnly: true },
+  { name: 'Economics', icon: ChartNoAxesCombined, tone: 'rose', streams: ['Commerce', 'Humanities'], iscOnly: true },
+  { name: 'Environmental Science', icon: Leaf, tone: 'teal', streams: ['Science', 'Commerce', 'Humanities'], iscOnly: true },
+  { name: 'History', icon: Landmark, tone: 'amber', streams: ['Humanities'], iscOnly: true },
+  { name: 'Home Science', icon: HeartPulse, tone: 'rose', streams: ['Humanities'], iscOnly: true },
+  { name: 'Political Science', icon: BookOpen, tone: 'purple', streams: ['Humanities'], iscOnly: true },
+  { name: 'Psychology', icon: Brain, tone: 'rose', streams: ['Humanities'], iscOnly: true },
+  { name: 'Sociology', icon: Users, tone: 'amber', streams: ['Humanities'], iscOnly: true },
+];
+export function getSubjects(board: string, stream = 'All') {
+  return subjects.filter(subject => (board === 'ISC' ? !subject.icseOnly : !subject.iscOnly) && (stream === 'All' || subject.streams.includes(stream)));
+}
+export function findSubjectMeta(name: string) {
+  const normalized = name.toLowerCase();
+  return subjects.find(s => s.name.toLowerCase() === normalized)
+    ?? subjects.find(s => normalized.startsWith(s.name.toLowerCase()) || s.name.toLowerCase().startsWith(normalized));
+}
+
+/** Sorts subject names into the registry's own order (the sequence the class
+ * hub already uses), so ICSE X lists Commercial Applications before
+ * Computer Applications and keeps Literature in English next to English
+ * Language instead of falling back to plain alphabetical. Names outside the
+ * registry — anything the curriculum crawler adds before it gets metadata —
+ * go last, alphabetically. */
+export function sortBySubjectOrder<T extends { name: string }>(items: T[]): T[] {
+  const rank = (name: string) => {
+    const index = subjects.findIndex(s => s.name.toLowerCase() === name.toLowerCase());
+    return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  return [...items].sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+}
+
+/** Whether a raw subject name (as it appears in a resource dataset, e.g.
+ * "Accountancy") belongs to the given ISC stream — used to filter the
+ * subject-card grid on the resources pages by Science/Commerce/Humanities,
+ * the same way the class hub's stream tabs already filter its subject
+ * list. `All` always matches. */
+export function subjectMatchesStream(name: string, stream: string) {
+  if (stream.toLowerCase() === 'all') return true;
+  const meta = findSubjectMeta(name);
+  // Case-insensitive: the canonical param value is 'Science' (see
+  // STREAM_OPTIONS), but a hand-typed or re-cased share link like
+  // `?stream=science` used to filter every subject out and show an empty grid.
+  return !!meta && (meta.streams as readonly string[]).some(s => s.toLowerCase() === stream.toLowerCase());
+}
+/** Cloudflare Web Analytics beacon site tag.
+ *
+ * Public by design — it ships in every page's HTML. It is the single source
+ * of truth for both the beacon injected in `__root.tsx` and the GraphQL
+ * filters in `admin-server.ts`, so the two cannot drift when the domain (and
+ * therefore the Web Analytics site) changes: update this one value and both
+ * the collection and the reporting move with it.
+ */
+export const RUM_SITE_TAG = '566049355231478b8966df2004f5d7e9';
+
+export const SITE_URL = 'https://lambda-prep.pages.dev';
+export const OG_IMAGE = `${SITE_URL}/og/lambda-prep-og.png`;
+
+/** Resolves to whatever domain the app is actually being served from (the
+ * Eazo preview/production domain, a Cloudflare custom domain, a Remix's own
+ * domain, etc.) instead of the hardcoded SITE_URL above, which only matters
+ * for SSR-only metadata (canonical/og tags) where there's no browser origin
+ * to read. Share links must always point at the viewer's current host, not
+ * wherever this code happened to be built for. */
+export function getSiteOrigin() {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  return SITE_URL;
+}
+
+export function pageHead(title: string, description: string, path = '/') {
+  const fullTitle = `Lambda Prep | ${title}`;
+  const url = `${SITE_URL}${path}`;
+  return {
+    meta: [
+      { title: fullTitle },
+      { name: 'description', content: description },
+      { property: 'og:title', content: fullTitle },
+      { property: 'og:description', content: description },
+      { property: 'og:type', content: 'website' },
+      { property: 'og:url', content: url },
+      { property: 'og:image', content: OG_IMAGE },
+      { property: 'og:image:width', content: '759' },
+      { property: 'og:image:height', content: '406' },
+      { name: 'twitter:card', content: 'summary_large_image' },
+      { name: 'twitter:title', content: fullTitle },
+      { name: 'twitter:description', content: description },
+      { name: 'twitter:image', content: OG_IMAGE },
+    ],
+    links: [{ rel: 'canonical', href: url }],
+  };
+}
